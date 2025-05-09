@@ -1,0 +1,126 @@
+#define F_CPU 8000000UL
+
+#include <avr/io.h>
+#include <util/delay.h>
+#include <string.h>
+#include <avr/interrupt.h>
+#include "PWM1/PWM1.h"
+#include "PWM0/PWM0.h"
+#define RX_BUF_SIZE 64
+
+volatile char rx_buffer[RX_BUF_SIZE];
+volatile uint8_t rx_pos = 0;
+volatile uint8_t line_ready = 0;
+
+
+void initADC(void);
+void InitUsart(void);
+void writeTextUart (char * Texto);
+uint8_t ADCcanal(uint8_t ch);
+
+int main(void) {
+	// Dividir a 8MHz
+	CLKPR = (1 << CLKPCE);
+	CLKPR = (1 << CLKPS0);
+
+	PWM1_INIT();
+	ConfigTimer0();
+	InitUsart();
+	initADC();
+	sei();
+
+	while (1) {
+		// Servo 1
+		uint8_t pot1 = ADCcanal(0);         // lee ADC0
+		uint8_t ang1 = (pot1 * 180) / 255;
+		angulo_servo1(ang1, 1);
+
+		// Servo 2
+		uint8_t pot2 = ADCcanal(1);         // lee ADC1
+		uint8_t ang2 = (pot2 * 180) / 255;
+		angulo_servo1(ang2, 2);
+
+		// Servo 3
+		uint8_t pot3 = ADCcanal(2);		// lee ADC2
+		SetAngle(pot3, 3);
+
+		// Servo 4
+		uint8_t pot4 = ADCcanal(3);		// lee ADC2
+		//SetAngle(pot4, 4);
+
+		_delay_ms(5);
+		
+		if (line_ready) {
+			line_ready = 0;
+			if (strcmp((char*)rx_buffer, "Posicion1") == 0) {
+				SetAngle(240, 4);
+			}
+			if (strcmp((char*)rx_buffer, "Posicion2") == 0) {
+				SetAngle(20, 4);
+			}
+			rx_buffer[0] = '\0';    // vacía el buffer
+		}
+	}
+}
+
+void initADC(void) {
+	ADMUX  = (1 << REFS0) | (1 << ADLAR);
+	ADCSRA = (1 << ADEN) | (1 << ADPS2) | (1 << ADPS1) | (1 << ADPS0);
+}
+
+uint8_t ADCcanal(uint8_t ch) {
+	ADMUX = (ADMUX & 0xF0) | (ch & 0x0F); // Selecciona canal PC[ch]
+	ADCSRA |= (1 << ADSC);
+	while (ADCSRA & (1 << ADSC));
+	return ADCH;
+}
+
+void writeTextUart (char * Texto)
+{
+	uint8_t i;
+	for(i = 0; Texto[i] != '\0'; i++)
+	{
+		while(!(UCSR0A & (1 << UDRE0)));
+		UDR0 = Texto[i];					//UDR0 es el USART Data Register (manda las letras una por una)
+	}
+}
+
+void InitUsart()
+{
+	UCSR0A = 0;
+	
+	//Modo fast
+	UCSR0A |= (1 << U2X0);
+	
+	UCSR0B = 0;
+	
+	//Habilitar la interrupcion de Lectura
+	UCSR0B |= (1 << RXCIE0);
+	//Hanilitamos Tx y Rx
+	UCSR0B |= (1 << RXEN0) | (1 << TXEN0) ;
+	
+	UCSR0C = 0; //8bits, No paridad, 1 bit de stop
+	UCSR0C |= (1 <<	UCSZ01) | (1 << UCSZ00);
+	
+	//Baudrate de 9600
+	UBRR0 = 103;
+	
+}
+
+// ISR: se ejecuta cada vez que llega un byte por UART0
+ISR(USART_RX_vect)
+{
+	char c = UDR0;  // leer UDR0 limpia la bandera RXC
+
+	
+	if (c == '\n' ||c == '\r'||c == '.' || rx_pos >= RX_BUF_SIZE-1) {
+		// fin de línea o buffer lleno ? cierra string y marca listo
+		rx_buffer[rx_pos] = '\0';
+		line_ready = 1;
+		rx_pos = 0;
+	}
+	else {
+		// acumula carácter
+		rx_buffer[rx_pos++] = c;
+	}
+}
