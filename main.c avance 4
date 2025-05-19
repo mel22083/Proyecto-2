@@ -1,0 +1,340 @@
+#define F_CPU 8000000UL
+
+#include <avr/io.h>
+#include <util/delay.h>
+#include <string.h>
+#include <avr/interrupt.h>
+#include <avr/eeprom.h>
+#include "PWM1/PWM1.h"
+#include "PWM0/PWM0.h"
+#define RX_BUF_SIZE 64
+
+volatile char rx_buffer[RX_BUF_SIZE];
+volatile uint8_t rx_pos = 0;
+volatile uint8_t line_ready = 0;
+volatile uint8_t modo = 0;
+volatile uint8_t EEPROM = 0;
+volatile uint8_t POSE = 0;
+volatile uint8_t pot1 = 0;
+volatile uint8_t pot2 = 0;
+volatile uint8_t pot3 = 0;
+volatile uint8_t pot4 = 0;
+volatile uint8_t leer_pot1 = 0;
+volatile uint8_t leer_pot2 = 0;
+volatile uint8_t leer_pot3 = 0;
+volatile uint8_t leer_pot4 = 0;
+volatile uint8_t ang1 = 0;
+volatile uint8_t ang2 = 0;
+
+
+
+unsigned char EEMEM POT1_P1;
+unsigned char EEMEM POT2_P1;
+unsigned char EEMEM POT3_P1;
+unsigned char EEMEM POT4_P1;
+
+unsigned char EEMEM POT1_P2;
+unsigned char EEMEM POT2_P2;
+unsigned char EEMEM POT3_P2;
+unsigned char EEMEM POT4_P2;
+
+unsigned char EEMEM POT1_P3;
+unsigned char EEMEM POT2_P3;
+unsigned char EEMEM POT3_P3;
+unsigned char EEMEM POT4_P3;
+
+void initADC(void);
+void InitUsart(void);
+void writeTextUart (char * Texto);
+uint8_t ADCcanal(uint8_t ch);
+
+void setup(void);
+
+void setup(){
+	
+	PCICR |= (1 << PCIE0) | (1 << PCIE2);
+
+	PCMSK0 |= (1 << PCINT0);  // Para D8 (PB0)
+	PCMSK0 |= (1 << PCINT3);  // Para D11 (PB3)
+	PCMSK0 |= (1 << PCINT4);  // Para D12 (PB4)
+
+	PCMSK2 |= (1 << PCINT23); // Para D7 (PD7)
+
+	DDRB &= ~((1 << PB0) | (1 << PB3) | (1 << PB4)); // D8, D11, D12
+	PORTB |= (1 << PB0) | (1 << PB3) | (1 << PB4);   // Activar pull-up
+
+	DDRD &= ~(1 << PD7); // D7
+	PORTD |= (1 << PD7); // Pull-up en D7
+
+	DDRD |= (1 << PD2) | (1 << PD3) | (1 << PD4);
+	PORTD &= ~((1 << PD2) | (1 << PD3) | (1 << PD4)); // Apagar LEDs inicialmente
+	
+	DDRB |= (1 << PB5);		// Led de la EEPROM
+	PORTB &= ~((1 << PB5));
+
+}
+
+int main(void) {
+	// Dividir a 8MHz
+	CLKPR = (1 << CLKPCE);
+	CLKPR = (1 << CLKPS0);
+
+	setup();
+	PWM1_INIT();
+	ConfigTimer0();
+	InitUsart();
+	initADC();
+	sei();
+
+	while (1) {
+		// Servo 1
+		pot1 = ADCcanal(0);         // lee ADC0
+		
+
+		// Servo 2
+		pot2 = ADCcanal(1);         // lee ADC1
+		
+
+		// Servo 3
+		pot3 = ADCcanal(2);		// lee ADC2
+		
+
+		// Servo 4
+		pot4 = ADCcanal(3);		// lee ADC2
+		
+
+		_delay_ms(10);
+		
+		if (line_ready) {
+			line_ready = 0;
+			if (strcmp((char*)rx_buffer, "Posicion1") == 0) {
+				SetAngle(240, 4);
+			}
+			if (strcmp((char*)rx_buffer, "Posicion2") == 0) {
+				SetAngle(20, 4);
+			}
+			rx_buffer[0] = '\0';    // vacía el buffer
+			
+		}
+		switch(modo){
+			
+			case 0:
+			PORTD |= (1 << PD2);
+			PORTD &= ~((1 << PD3) | (1 << PD4));
+			break;
+			
+			case 1:
+			PORTD |= (1 << PD3);
+			PORTD &= ~((1 << PD2) | (1 << PD4));
+			break;
+			
+			case 2:
+			PORTD |= (1 << PD4);
+			PORTD &= ~((1 << PD2) | (1 << PD3));
+			break;
+			
+		}
+		switch(EEPROM){
+			
+			case 0:
+			PORTB &= ~((1 << PB5));
+			
+			ang1 = (pot1 * 180) / 255;
+			angulo_servo1(ang1, 1);
+			
+			ang2 = (pot2 * 180) / 255;
+			angulo_servo1(ang2, 2);
+			
+			SetAngle(pot3, 3);
+			
+			SetAngle(pot4, 4);
+			
+			break;
+			
+			case 1:
+			PORTB |= (1 << PB5);
+			
+			ang1 = (leer_pot1 * 180) / 255;
+			angulo_servo1(ang1, 1);
+			
+			ang2 = (leer_pot2 * 180) / 255;
+			angulo_servo1(ang2, 2);
+			
+			SetAngle(leer_pot3, 3);
+			
+			SetAngle(leer_pot4, 4);
+			
+			switch(POSE){
+				
+				case 0:
+				PORTD |= (1 << PD2);
+				PORTD &= ~((1 << PD3) | (1 << PD4));
+				break;
+				
+				case 1:
+				PORTD |= (1 << PD3);
+				PORTD &= ~((1 << PD2) | (1 << PD4));
+				break;
+				
+				case 2:
+				PORTD |= (1 << PD4);
+				PORTD &= ~((1 << PD2) | (1 << PD3));
+				break;
+				
+			}
+			break;
+			
+		}
+	}
+}
+
+void initADC(void) {
+	ADMUX  = (1 << REFS0) | (1 << ADLAR);
+	ADCSRA = (1 << ADEN) | (1 << ADPS2) | (1 << ADPS1) | (1 << ADPS0);
+}
+
+uint8_t ADCcanal(uint8_t ch) {
+	ADMUX = (ADMUX & 0xF0) | (ch & 0x0F); // Selecciona canal PC[ch]
+	ADCSRA |= (1 << ADSC);
+	while (ADCSRA & (1 << ADSC));
+	return ADCH;
+}
+
+void writeTextUart (char * Texto)
+{
+	uint8_t i;
+	for(i = 0; Texto[i] != '\0'; i++)
+	{
+		while(!(UCSR0A & (1 << UDRE0)));
+		UDR0 = Texto[i];					//UDR0 es el USART Data Register (manda las letras una por una)
+	}
+}
+
+void InitUsart()
+{
+	UCSR0A = 0;
+	
+	//Modo fast
+	UCSR0A |= (1 << U2X0);
+	
+	UCSR0B = 0;
+	
+	//Habilitar la interrupcion de Lectura
+	UCSR0B |= (1 << RXCIE0);
+	//Hanilitamos Tx y Rx
+	UCSR0B |= (1 << RXEN0) | (1 << TXEN0) ;
+	
+	UCSR0C = 0; //8bits, No paridad, 1 bit de stop
+	UCSR0C |= (1 <<	UCSZ01) | (1 << UCSZ00);
+	
+	//Baudrate de 9600
+	UBRR0 = 103;
+	
+}
+
+// ISR: se ejecuta cada vez que llega un byte por UART0
+ISR(USART_RX_vect)
+{
+	char c = UDR0;  // leer UDR0 limpia la bandera RXC
+
+	
+	if (c == '\n' ||c == '\r'||c == '.' || rx_pos >= RX_BUF_SIZE-1) {
+		// fin de línea o buffer lleno ? cierra string y marca listo
+		rx_buffer[rx_pos] = '\0';
+		line_ready = 1;
+		rx_pos = 0;
+	}
+	else {
+		// acumula carácter
+		rx_buffer[rx_pos++] = c;
+	}
+}
+
+ISR(PCINT0_vect){
+	_delay_ms(100); // Antirrebote
+
+	// D8 (PB0)
+	if (!(PINB & (1 << PB0))) {
+		if (EEPROM == 1) {
+			switch (POSE) {
+				case 0:
+				leer_pot1 = eeprom_read_byte(&POT1_P1);
+				leer_pot2 = eeprom_read_byte(&POT2_P1);
+				leer_pot3 = eeprom_read_byte(&POT3_P1);
+				leer_pot4 = eeprom_read_byte(&POT4_P1);
+				break;
+
+				case 1:
+				leer_pot1 = eeprom_read_byte(&POT1_P2);
+				leer_pot2 = eeprom_read_byte(&POT2_P2);
+				leer_pot3 = eeprom_read_byte(&POT3_P2);
+				leer_pot4 = eeprom_read_byte(&POT4_P2);
+				break;
+
+				case 2:
+				leer_pot1 = eeprom_read_byte(&POT1_P3);
+				leer_pot2 = eeprom_read_byte(&POT2_P3);
+				leer_pot3 = eeprom_read_byte(&POT3_P3);
+				leer_pot4 = eeprom_read_byte(&POT4_P3);
+				break;
+			}
+		}
+	}
+
+	// D11 (PB3)
+	if (!(PINB & (1 << PB3))) {
+		if (EEPROM == 1) {
+			switch (POSE) {
+				case 0:
+				eeprom_write_byte(&POT1_P1, pot1);
+				eeprom_write_byte(&POT2_P1, pot2);
+				eeprom_write_byte(&POT3_P1, pot3);
+				eeprom_write_byte(&POT4_P1, pot4);
+				break;
+
+				case 1:
+				eeprom_write_byte(&POT1_P2, pot1);
+				eeprom_write_byte(&POT2_P2, pot2);
+				eeprom_write_byte(&POT3_P2, pot3);
+				eeprom_write_byte(&POT4_P2, pot4);
+				break;
+
+				case 2:
+				eeprom_write_byte(&POT1_P3, pot1);
+				eeprom_write_byte(&POT2_P3, pot2);
+				eeprom_write_byte(&POT3_P3, pot3);
+				eeprom_write_byte(&POT4_P3, pot4);
+				break;
+			}
+		}
+	}
+
+	// D12 (PB4)
+	if (!(PINB & (1 << PB4))) {
+		if (EEPROM == 0) {
+			modo++;
+			if (modo == 3) {
+				modo = 0;
+			}
+		}
+		if (EEPROM == 1) {
+			POSE++;
+			if (POSE == 3) {
+				POSE = 0;
+			}
+		}
+	}
+}
+ISR(PCINT2_vect){
+	
+	_delay_ms(100); // Antirrebote
+
+	// D7 (PD7)
+	if (!(PIND & (1 << PD7))) {
+		// Acción para D7
+		if (modo == 0){
+			EEPROM = !EEPROM;
+			
+		}
+	}
+}
